@@ -1,8 +1,12 @@
 {
-	"name": "tcbuilder",
-	"description": "A minimal D application.",
-	"copyright": "Copyright © 2016, stiff",
-	"authors": ["stiff"],
-	"dependencies": {
-	}
+    "name": "tcbuilder",
+    "description": "A utility to build a network of spiking neurons based on specific parameters.",
+    "copyright": "Copyright © 2016, Adam Stiff",
+    "authors": ["stiff"],
+    "dependencies": {
+
+    },
+    "libs": [
+	"gsl"
+    ]
 }

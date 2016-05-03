@@ -3,6 +3,14 @@ import std.experimental.ndslice;
 import std.algorithm.iteration;
 import std.conv;
 import std.array;
+import gsl_qrng;
+import gsl_rng;
+import gsl_randist;
+
+struct pair{
+  real x;
+  real y;
+}
 
 void main(string[] args)
 {
@@ -168,7 +176,9 @@ void main(string[] args)
       axon_zPrior[i,l] = classParams[j++].to!real/1000;
     }
   }
+
   // place neurons
+  
   // calculate connection probabilities for each pair of neurons
   // choose connections
   // choose synapse locations for each connection
