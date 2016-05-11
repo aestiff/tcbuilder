@@ -1,6 +1,7 @@
 import std.stdio;
 import std.experimental.ndslice;
 import std.algorithm.iteration;
+import std.algorithm.searching;
 import std.conv;
 import std.array;
 import std.range;
@@ -201,7 +202,8 @@ void main(string[] args)
   gsl_rng_env_setup();
   rngType = gsl_rng_default;
   rng = gsl_rng_alloc(rngType);
-
+  gsl_qrng* qrng;
+  
   foreach(classNum; numClasses.iota){
     j = 0;
     switch(xDistro[classNum]){ // ignoring y distro (i.e. assuming both equal) for expediency for now.
@@ -223,13 +225,39 @@ void main(string[] args)
       };
       break;
     case 'H': // Halton sequence
+      if (qrng is null) {
+	qrng = gsl_qrng_alloc(gsl_qrng_halton, 2);
+      } else if (qrng.type != gsl_qrng_halton){
+	gsl_qrng_free(qrng);
+	qrng = gsl_qrng_alloc(gsl_qrng_halton, 2);	
+      }
+      choose = delegate Slice!(1,double*)() {
+	double[] x = new double[](2);
+	auto pair = x.sliced(2);
+	gsl_qrng_get(qrng, &x[0]);
+	return pair;
+      };
       break;
     case 'N': // Niederreiter sequence
+      if (qrng is null) {
+	qrng = gsl_qrng_alloc(gsl_qrng_niederreiter_2, 2);
+      } else if (qrng.type != gsl_qrng_niederreiter_2){
+	gsl_qrng_free(qrng);
+	qrng = gsl_qrng_alloc(gsl_qrng_niederreiter_2, 2);	
+      }
+      choose = delegate Slice!(1,double*)() {
+	double[] x = new double[](2);
+	auto pair = x.sliced(2);
+	gsl_qrng_get(qrng, &x[0]);
+	return pair;
+      };
       break;
     default:
       break;
     }
+    locations ~= generate!choose.take(unitsPerClass[classNum]).array();
   }
+
   // calculate connection probabilities for each pair of neurons
   // choose connections
   // choose synapse locations for each connection
