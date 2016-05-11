@@ -3,6 +3,8 @@ import std.experimental.ndslice;
 import std.algorithm.iteration;
 import std.conv;
 import std.array;
+import std.range;
+import std.string;
 import gsl_qrng;
 import gsl_rng;
 import gsl_randist;
@@ -17,30 +19,34 @@ void main(string[] args)
   // execute with: tcbuilder <input_file> <output_file>
 
   auto inputFile = File(args[1]);
-  auto outputFile = File(args[2]);
+  auto outputFile = File(args[2], "wt");
   
   // parse input file
   // network-level params
   auto netParams = inputFile
     .readln()
+    .chomp()
     .splitter('\t')
     .filter!(a => a != "")
-    .array()[0..5]
-    .map!(to!int);
+    .take(5)
+    .map!(to!int)
+    .array();
   int numClasses = netParams[0];
   int numUnits = netParams[1];
   int numConns = netParams[2];
   int numLayers = netParams[3];
   int maxDelay = netParams[4];
   
-  // layer map object (currently only a configurable delay between layers)
+  // layer map object (currently only a configurable distance between layers, in um)
   // TODO: mappable inter-layer plane geometry
   auto interLayerDelays = inputFile
     .readln()
+    .chomp()
     .splitter('\t')
     .filter!(a => a != "")
     .map!(to!int)
-    .array()[0..numClasses - 1];
+    .take(numClasses - 1)
+    .array();
 
   // class-level params
   string[] className;  // name
@@ -88,6 +94,7 @@ void main(string[] args)
   for (i = 0; i < numClasses; i++){
     classParams = inputFile
       .readln
+      .chomp
       .splitter('\t')
       .array();
     j = 0;
@@ -169,16 +176,60 @@ void main(string[] args)
     }
     // per-layer dendritic Z abundance/prior
     for (l = 0; l < numLayers; l++){
-      dend_zPrior[i,l] = classParams[j++].to!real/1000;
+      dend_zPrior[i,l] = classParams[j++].to!real;
     }
     // per-layer axonal Z abundance/prior
     for (l = 0; l < numLayers; l++){
-      axon_zPrior[i,l] = classParams[j++].to!real/1000;
+      axon_zPrior[i,l] = classParams[j++].to!real;
     }
   }
 
-  // place neurons
+  //roundabout way to avoid rounding errors
+  auto prefixSum = sequence!
+    ((a,n) => cast(int)(sum(abundance[0..n])*numUnits))(0)
+    .take(numClasses + 1);
+  int[] unitsPerClass = zip(prefixSum.dropOne, prefixSum.take(numClasses))
+    .map!("a[0] - a[1]")
+    .array();
   
+  // place neurons
+  Slice!(1,double*)[] locations;
+  Slice!(1,double*) delegate() choose;
+
+  const(gsl_rng_type)* rngType;
+  gsl_rng* rng;
+  gsl_rng_env_setup();
+  rngType = gsl_rng_default;
+  rng = gsl_rng_alloc(rngType);
+
+  foreach(classNum; numClasses.iota){
+    j = 0;
+    switch(xDistro[classNum]){ // ignoring y distro (i.e. assuming both equal) for expediency for now.
+    case 'U': // uniform random
+      choose = delegate Slice!(1,double*)() {
+	auto pair = new double[2].sliced(2);
+	// TODO: bounds
+	pair[0] = gsl_rng_uniform(rng);
+	pair[1] = gsl_rng_uniform(rng);
+	return pair;
+      };
+      break;
+    case 'L': // in a line
+      choose = delegate Slice!(1,double*)() {
+      	auto pair = new double[2].sliced(2);
+      	pair[0] = xMin[classNum] + ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
+	pair[1] = yMin[classNum] + ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
+	return pair;
+      };
+      break;
+    case 'H': // Halton sequence
+      break;
+    case 'N': // Niederreiter sequence
+      break;
+    default:
+      break;
+    }
+  }
   // calculate connection probabilities for each pair of neurons
   // choose connections
   // choose synapse locations for each connection
