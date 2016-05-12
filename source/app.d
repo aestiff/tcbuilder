@@ -19,6 +19,10 @@ void main(string[] args)
 {
   // execute with: tcbuilder <input_file> <output_file>
 
+  if (args.length < 3){
+    writeln("usage: tcbuilder <input_file> <output_file>");
+    return;
+  }
   auto inputFile = File(args[1]);
   auto outputFile = File(args[2], "wt");
   
@@ -232,6 +236,7 @@ void main(string[] args)
 	qrng = gsl_qrng_alloc(gsl_qrng_halton, 2);	
       }
       choose = delegate Slice!(1,double*)() {
+	// TODO: bounds
 	double[] x = new double[](2);
 	auto pair = x.sliced(2);
 	gsl_qrng_get(qrng, &x[0]);
@@ -246,6 +251,7 @@ void main(string[] args)
 	qrng = gsl_qrng_alloc(gsl_qrng_niederreiter_2, 2);	
       }
       choose = delegate Slice!(1,double*)() {
+	// TODO: bounds
 	double[] x = new double[](2);
 	auto pair = x.sliced(2);
 	gsl_qrng_get(qrng, &x[0]);
@@ -259,6 +265,17 @@ void main(string[] args)
   }
 
   // calculate connection probabilities for each pair of neurons
+  auto scales = new double[](numUnits*numUnits)
+    .sliced(numUnits, numUnits);
+  // need to store these for later sampling of synapse locations
+  auto productCovs = new double[](numUnits * numUnits * 2 * 2)
+    .sliced(numUnits, numUnits, 2, 2)
+    .pack!2;
+  // ditto
+  auto productMeans = new double[](numUnits * numUnits)
+    .sliced(numUnits, numUnits);
+
+
   // choose connections
   // choose synapse locations for each connection
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
@@ -269,3 +286,45 @@ void main(string[] args)
 	
 }
 
+// determinant; only works for 2x2 matrix, which is all I need...
+private double det(Slice!(2,double*) m){
+  return m[0,0]*m[1,1]-m[0,1]*m[1,0];
+}
+
+// matrix inverse; only works for 2x2 diagonal matrices (also all I need)
+private auto inv(Slice!(2,double*) m) {
+  auto n = (cast(double[])[1, 0, 0, 1]).sliced(2,2);
+  n.diagonal[] /= m.diagonal;
+  return n;
+}
+
+//...and a naive matrix multiply. THAT'S all I need.
+private auto mm(Slice!(2,double*) a, Slice!(2,double*) b){
+  assert(a.shape[1] == b.shape[0]);
+  auto c = new double[](a.shape[0] * b.shape[1])
+    .sliced(a.shape[0], b.shape[1]);
+  for (auto els = c.byElement; !els.empty; els.popFront){
+    // should I have to allocate here?
+    auto temp = a[els.index[0], 0..$].array;
+    temp[] *= b[0..$, els.index[1]].array[];
+    //    writeln(temp);
+    els.front = sum(temp[]);
+  }
+  return c;
+}
+
+// ...and this lamp.
+unittest {
+  auto a = ((4.0).iota.array).sliced(2,2);
+  auto b = ((6.0).iota.array).sliced(2,3);
+  auto c = (cast(double[])[2, 0, 0, 2]).sliced(2,2);
+  assert(a.mm(b) ==
+	 [[3, 4, 5],
+	  [9, 14, 19]]
+	 );
+  assert(a.det == -2);
+  assert(c.inv ==
+	 [[0.5, 0],
+	  [0, 0.5]]
+	 );
+}

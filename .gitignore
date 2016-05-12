@@ -5,5 +5,7 @@ __dummy.html
 *.obj
 tcbuilder
 data
-test/*#
+__*
+*/.#*
+*#
 *~
