@@ -1,11 +1,12 @@
 import std.stdio;
-import std.experimental.ndslice;
+import mir.ndslice;
 import std.algorithm.iteration;
 import std.algorithm.searching;
 import std.conv;
 import std.array;
 import std.range;
 import std.string;
+import std.math;
 import gsl_qrng;
 import gsl_rng;
 import gsl_randist;
@@ -86,13 +87,15 @@ void main(string[] args)
   real[] dend_totLen;  // total dendritic length (mm)
   real[] axon_totLen;  // total axonal length (mm)
   // per-layer dendritic X,Y extents (mm)
-  auto dend_xyLayerSd = new real[numClasses*numLayers].sliced(numClasses, numLayers);
+  auto dend_classLayerCov = (0.0).repeat(numClasses*numLayers*4)
+    .array.sliced(numClasses, numLayers, 2, 2).pack!2;
   // per-layer axonal X,Y extents (mm)
-  auto axon_xyLayerSd = new real[numClasses*numLayers].sliced(numClasses, numLayers);
+  auto axon_classLayerCov = (0.0).repeat(numClasses*numLayers*4)
+    .array.sliced(numClasses, numLayers, 2, 2).pack!2;
   // per-layer dendritic Z abundance/prior
-  auto dend_zPrior = new real[numClasses*numLayers].sliced(numClasses, numLayers);
+  auto dend_zPrior = new double[numClasses*numLayers].sliced(numClasses, numLayers);
   // per-layer axonal Z abundance/prior
-  auto axon_zPrior = new real[numClasses*numLayers].sliced(numClasses, numLayers);
+  auto axon_zPrior = new double[numClasses*numLayers].sliced(numClasses, numLayers);
 
   string[] classParams;
   int i,j,l;
@@ -173,11 +176,13 @@ void main(string[] args)
     axon_totLen ~= classParams[j++].to!real/1000;
     // per-layer dendritic X,Y extents
     for (l = 0; l < numLayers; l++){
-      dend_xyLayerSd[i,l] = classParams[j++].to!real/1000;
+      dend_classLayerCov[i,l][0,0] = classParams[j].to!real/1000;
+      dend_classLayerCov[i,l][1,1] = classParams[j++].to!real/1000;
     }
     // per-layer axonal X,Y extents
     for (l = 0; l < numLayers; l++){
-      axon_xyLayerSd[i,l] = classParams[j++].to!real/1000;
+      axon_classLayerCov[i,l][0,0] = classParams[j].to!real/1000;
+      axon_classLayerCov[i,l][1,1] = classParams[j++].to!real/1000;
     }
     // per-layer dendritic Z abundance/prior
     for (l = 0; l < numLayers; l++){
@@ -190,16 +195,22 @@ void main(string[] args)
   }
 
   //roundabout way to avoid rounding errors
+  // for some reason recurrence! wasn't working, so zip!ping sequence!s instead
   auto prefixSum = sequence!
     ((a,n) => cast(int)(sum(abundance[0..n])*numUnits))(0)
     .take(numClasses + 1);
   int[] unitsPerClass = zip(prefixSum.dropOne, prefixSum.take(numClasses))
     .map!("a[0] - a[1]")
     .array();
+  auto unitClass = unitsPerClass
+    .enumerate
+    .map!("a.index.repeat(a.value)")
+    .joiner;
+
   
   // place neurons
-  Slice!(1,double*)[] locations;
-  Slice!(1,double*) delegate() choose;
+  Slice!(2,double*)[] locations;
+  Slice!(2,double*) delegate() choose;
 
   const(gsl_rng_type)* rngType;
   gsl_rng* rng;
@@ -212,19 +223,19 @@ void main(string[] args)
     j = 0;
     switch(xDistro[classNum]){ // ignoring y distro (i.e. assuming both equal) for expediency for now.
     case 'U': // uniform random
-      choose = delegate Slice!(1,double*)() {
-	auto pair = new double[2].sliced(2);
+      choose = delegate Slice!(2,double*)() {
+	auto pair = new double[2].sliced(2,1);
 	// TODO: bounds
-	pair[0] = gsl_rng_uniform(rng);
-	pair[1] = gsl_rng_uniform(rng);
+	pair[0,0] = gsl_rng_uniform(rng);
+	pair[1,0] = gsl_rng_uniform(rng);
 	return pair;
       };
       break;
     case 'L': // in a line
-      choose = delegate Slice!(1,double*)() {
-      	auto pair = new double[2].sliced(2);
-      	pair[0] = xMin[classNum] + ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
-	pair[1] = yMin[classNum] + ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
+      choose = delegate Slice!(2,double*)() {
+      	auto pair = new double[2].sliced(2,1);
+      	pair[0,0] = xMin[classNum] + ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
+	pair[1,0] = yMin[classNum] + ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
 	return pair;
       };
       break;
@@ -235,10 +246,10 @@ void main(string[] args)
 	gsl_qrng_free(qrng);
 	qrng = gsl_qrng_alloc(gsl_qrng_halton, 2);	
       }
-      choose = delegate Slice!(1,double*)() {
+      choose = delegate Slice!(2,double*)() {
 	// TODO: bounds
 	double[] x = new double[](2);
-	auto pair = x.sliced(2);
+	auto pair = x.sliced(2,1);
 	gsl_qrng_get(qrng, &x[0]);
 	return pair;
       };
@@ -250,10 +261,10 @@ void main(string[] args)
 	gsl_qrng_free(qrng);
 	qrng = gsl_qrng_alloc(gsl_qrng_niederreiter_2, 2);	
       }
-      choose = delegate Slice!(1,double*)() {
+      choose = delegate Slice!(2,double*)() {
 	// TODO: bounds
 	double[] x = new double[](2);
-	auto pair = x.sliced(2);
+	auto pair = x.sliced(2,1);
 	gsl_qrng_get(qrng, &x[0]);
 	return pair;
       };
@@ -265,17 +276,37 @@ void main(string[] args)
   }
 
   // calculate connection probabilities for each pair of neurons
-  auto scales = new double[](numUnits*numUnits)
-    .sliced(numUnits, numUnits);
+  // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 - S2)^-1*(m1-m2))
+  auto scales = unitClass.enumerate
+    .map!(pre => unitClass.enumerate
+  	  .map!(post => numLayers.iota
+  		.map!(layer =>
+  		      (1 / (sqrt(det(elMul(msum(axon_classLayerCov[pre.value, layer],
+					       dend_classLayerCov[post.value, layer]),
+					   (2*PI))
+				     ))))
+		      * exp(-0.5*(msum(locations[pre.index], locations[post.index].elMul(-1.0))
+				  .transposed
+				    .mmul(inv(msum(axon_classLayerCov[pre.value, layer],
+						   dend_classLayerCov[post.value, layer].elMul(-1.0)))
+					      .mmul(msum(locations[pre.index],
+							 locations[post.index].elMul(-1.0)))
+					      ))[0,0])
+  		      )));
+  //writeln(scales);
   // need to store these for later sampling of synapse locations
   auto productCovs = new double[](numUnits * numUnits * 2 * 2)
     .sliced(numUnits, numUnits, 2, 2)
     .pack!2;
   // ditto
-  auto productMeans = new double[](numUnits * numUnits)
-    .sliced(numUnits, numUnits);
+  auto productMeans = new double[](numUnits * numUnits * 2)
+    .sliced(numUnits, numUnits, 2, 1)
+    .pack!1;
+
+  //  for (auto elems = scales.byElement; !elems.empty; elems.popFront){
 
 
+  //  }
   // choose connections
   // choose synapse locations for each connection
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
@@ -299,26 +330,46 @@ private auto inv(Slice!(2,double*) m) {
 }
 
 //...and a naive matrix multiply. THAT'S all I need.
-private auto mm(Slice!(2,double*) a, Slice!(2,double*) b){
-  assert(a.shape[1] == b.shape[0]);
+private auto mmul(ulong M, ulong N)(Slice!(M,double*) a, Slice!(N,double*) b){
+  static assert(M == 2 && N == 2);
+  assert (a.shape[1] == b.shape[0]);
   auto c = new double[](a.shape[0] * b.shape[1])
     .sliced(a.shape[0], b.shape[1]);
   for (auto els = c.byElement; !els.empty; els.popFront){
-    // should I have to allocate here?
-    auto temp = a[els.index[0], 0..$].array;
-    temp[] *= b[0..$, els.index[1]].array[];
-    //    writeln(temp);
-    els.front = sum(temp[]);
+    els.front =
+      zip(a[els.index[0], 0..$], b[0..$, els.index[1]])
+      .map!("a[0] * a[1]")
+      .sum;
   }
   return c;
 }
 
 // ...and this lamp.
+private auto msum(ulong N)(Slice!(N,double*) a, Slice!(N,double*) b){
+  assert(a.shape == b.shape);
+  static if( N > 1) {
+    return zip(a.joiner, b.joiner).map!("a[0] + a[1]").array.sliced(a.shape);
+  } else {
+    return zip(a,b).map!("a[0] + a[1]").array.sliced(a.shape);
+  }
+}
+
+private auto elMul(ulong N)(Slice!(N,double*) a, double k){
+  static if( N > 1) {
+    return zip(a.joiner, k.repeat(a.elementsCount)).map!("a[0] * a[1]").array.sliced(a.shape);
+  } else {
+    return zip(a, k.repeat(a.elementsCount)).map!("a[0] * a[1]").array.sliced(a.shape);
+  }
+}
+
 unittest {
   auto a = ((4.0).iota.array).sliced(2,2);
   auto b = ((6.0).iota.array).sliced(2,3);
   auto c = (cast(double[])[2, 0, 0, 2]).sliced(2,2);
-  assert(a.mm(b) ==
+  assert(msum(a, c) == [2.0, 1.0, 2.0, 5.0].sliced(2,2));
+  assert(elMul(b, 2.0) == [0.0, 2.0, 4.0,
+			   6.0, 8.0, 10.0].sliced(2,3));
+  assert(a.mmul(b) ==
 	 [[3, 4, 5],
 	  [9, 14, 19]]
 	 );

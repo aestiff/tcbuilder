@@ -1,4 +1,7 @@
 {
 	"fileVersion": 1,
-	"versions": {}
+	"versions": {
+		"mir": "0.15.3",
+		"imageformats": "6.0.0"
+	}
 }

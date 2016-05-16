@@ -4,7 +4,7 @@
     "copyright": "Copyright © 2016, Adam Stiff",
     "authors": ["stiff"],
     "dependencies": {
-
+	"mir": "~>0.15.3"
     },
     "libs": [
 	"gsl"
