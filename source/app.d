@@ -206,6 +206,9 @@ void main(string[] args)
     .enumerate
     .map!("a.index.repeat(a.value)")
     .joiner;
+  version(imperative){
+    auto unitClassArr = unitClass.array;
+  }
 
   
   // place neurons
@@ -276,37 +279,69 @@ void main(string[] args)
   }
 
   // calculate connection probabilities for each pair of neurons
-  // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 - S2)^-1*(m1-m2))
-  auto scales = unitClass.enumerate
-    .map!(pre => unitClass.enumerate
-  	  .map!(post => numLayers.iota
-  		.map!(layer =>
-  		      (1 / (sqrt(det(elMul(msum(axon_classLayerCov[pre.value, layer],
-					       dend_classLayerCov[post.value, layer]),
-					   (2*PI))
-				     ))))
-		      * exp(-0.5*(msum(locations[pre.index], locations[post.index].elMul(-1.0))
-				  .transposed
+  // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 + S2)^-1*(m1-m2))
+  version (functional){
+    auto scales = unitClass.enumerate
+      .map!(pre => unitClass.enumerate
+	    .map!(post => numLayers.iota
+		  .map!(layer =>
+			(1 / (sqrt(det(elMul(msum(axon_classLayerCov[pre.value, layer],
+						  dend_classLayerCov[post.value, layer]),
+					     (2*PI))
+				       ))))
+			* exp(-0.5*(msum(locations[pre.index], locations[post.index].elMul(-1.0))
+				    .transposed
 				    .mmul(inv(msum(axon_classLayerCov[pre.value, layer],
-						   dend_classLayerCov[post.value, layer].elMul(-1.0)))
-					      .mmul(msum(locations[pre.index],
-							 locations[post.index].elMul(-1.0)))
-					      ))[0,0])
-  		      )));
-  //writeln(scales);
+						   dend_classLayerCov[post.value, layer]))
+					  .mmul(msum(locations[pre.index],
+						     locations[post.index].elMul(-1.0)))
+					  ))[0,0])
+			)));
+    //writeln(scales);
+  }
+  version (imperative){
+    auto scales = new double[](numUnits * numUnits * numLayers)
+      .sliced(numUnits, numUnits, numLayers);
+    for (auto elems = scales.byElement; !elems.empty; elems.popFront){
+      auto S1p2 = axon_classLayerCov[unitClassArr[elems.index[0]], elems.index[2]].slice;
+      S1p2[] += dend_classLayerCov[unitClassArr[elems.index[1]], elems.index[2]];
+      auto S1p2tau = S1p2.slice;
+      S1p2tau[] *= 2*PI;
+      double coeff = 1/sqrt(det(S1p2tau));
+      auto mdiff = locations[elems.index[0]].slice;
+      mdiff[] -= locations[elems.index[1]];
+      double exponent = mdiff.transposed.mmul(S1p2.inv).mmul(mdiff)[0,0] * (-0.5);
+      elems.front = coeff * exp(exponent);
+    }
+    //writeln(scales);
+  }
   // need to store these for later sampling of synapse locations
-  auto productCovs = new double[](numUnits * numUnits * 2 * 2)
-    .sliced(numUnits, numUnits, 2, 2)
+  // S3 = S1*(S1+S2)^-1*S2
+  auto productCovs = new double[](numUnits * numUnits * numLayers * 2 * 2)
+    .sliced(numUnits, numUnits, numLayers, 2, 2)
     .pack!2;
-  // ditto
-  auto productMeans = new double[](numUnits * numUnits * 2)
-    .sliced(numUnits, numUnits, 2, 1)
-    .pack!1;
+  // m3 = S2*(S1+S2)^-1*m1 + S1*(S1+S2)^-1*m2
+  // see: http://math.stackexchange.com/questions/157172 \
+  //   /product-of-two-multivariate-gaussians-distributions
+  auto productMeans = new double[](numUnits * numUnits * numLayers * 2)
+    .sliced(numUnits, numUnits, numLayers, 2, 1)
+    .pack!2;
+  //could do this with byElement, but can't easily combine combinable computations
+  for (i = 0; i < numUnits; i++){
+    for (j = 0; j < numUnits; j++){
+      for (l = 0; l < numLayers; l++){
+	auto s1 = axon_classLayerCov[unitClassArr[i], l].slice;
+	auto s2 = dend_classLayerCov[unitClassArr[j], l].slice;
+	auto s12inv = s1.slice;
+	s12inv[] += s2;
+	s12inv = s12inv.inv;
+	productCovs[i,j,l][] = s1.mmul(s12inv).mmul(s2);
+	productMeans[i,j,l][] = s2.mmul(s12inv).mmul(locations[i]);
+	productMeans[i,j,l][] += s1.mmul(s12inv).mmul(locations[j]);
+      }
+    }
+  }
 
-  //  for (auto elems = scales.byElement; !elems.empty; elems.popFront){
-
-
-  //  }
   // choose connections
   // choose synapse locations for each connection
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
