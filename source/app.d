@@ -84,8 +84,8 @@ void main(string[] args)
   real[] maxWeight;  // max synaptic weight
   bool[] record;  // record this class of neurons?
   string[] target;  // postsynaptic target
-  real[] dend_totLen;  // total dendritic length (mm)
-  real[] axon_totLen;  // total axonal length (mm)
+  double[] dend_totLen;  // total dendritic length (mm)
+  double[] axon_totLen;  // total axonal length (mm)
   // per-layer dendritic X,Y extents (mm)
   auto dend_classLayerCov = (0.0).repeat(numClasses*numLayers*4)
     .array.sliced(numClasses, numLayers, 2, 2).pack!2;
@@ -210,6 +210,11 @@ void main(string[] args)
     auto unitClassArr = unitClass.array;
   }
 
+  //normalize process lengths as a probability
+  auto dend_classPrior = dend_totLen.dup;
+  dend_classPrior[] /= dend_totLen.sum;
+  auto axon_classPrior = axon_totLen.dup;
+  axon_classPrior[] /= axon_totLen.sum;
   
   // place neurons
   Slice!(2,double*)[] locations;
@@ -237,8 +242,10 @@ void main(string[] args)
     case 'L': // in a line
       choose = delegate Slice!(2,double*)() {
       	auto pair = new double[2].sliced(2,1);
-      	pair[0,0] = xMin[classNum] + ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
-	pair[1,0] = yMin[classNum] + ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
+      	pair[0,0] = xMin[classNum]
+	+ ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
+	pair[1,0] = yMin[classNum]
+	+ ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
 	return pair;
       };
       break;
@@ -275,12 +282,14 @@ void main(string[] args)
     default:
       break;
     }
+    //TODO: sort
     locations ~= generate!choose.take(unitsPerClass[classNum]).array();
   }
 
   // calculate connection probabilities for each pair of neurons
   // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 + S2)^-1*(m1-m2))
   version (functional){
+    // warning: functional code not updated to handle zero variance convention
     auto scales = unitClass.enumerate
       .map!(pre => unitClass.enumerate
 	    .map!(post => numLayers.iota
@@ -299,19 +308,26 @@ void main(string[] args)
 			)));
     //writeln(scales);
   }
-  version (imperative){
+  version (imperative){ // seemingly faster
     auto scales = new double[](numUnits * numUnits * numLayers)
       .sliced(numUnits, numUnits, numLayers);
     for (auto elems = scales.byElement; !elems.empty; elems.popFront){
-      auto S1p2 = axon_classLayerCov[unitClassArr[elems.index[0]], elems.index[2]].slice;
-      S1p2[] += dend_classLayerCov[unitClassArr[elems.index[1]], elems.index[2]];
-      auto S1p2tau = S1p2.slice;
-      S1p2tau[] *= 2*PI;
-      double coeff = 1/sqrt(det(S1p2tau));
-      auto mdiff = locations[elems.index[0]].slice;
-      mdiff[] -= locations[elems.index[1]];
-      double exponent = mdiff.transposed.mmul(S1p2.inv).mmul(mdiff)[0,0] * (-0.5);
-      elems.front = coeff * exp(exponent);
+      auto S1 = axon_classLayerCov[unitClassArr[elems.index[0]], elems.index[2]].slice;
+      auto S2 = dend_classLayerCov[unitClassArr[elems.index[1]], elems.index[2]].slice;
+      // input has zero listed as variance if no probability mass for that class in that layer.
+      if (S1[0,0] != 0 && S2[0,0] != 0){
+	S2[] += S1;
+	auto S1p2tau = S2.slice;
+	S1p2tau[] *= 2*PI;
+	double coeff = 1/sqrt(det(S1p2tau));
+	auto mdiff = locations[elems.index[0]].slice;
+	mdiff[] -= locations[elems.index[1]];
+	double exponent = mdiff.transposed.mmul(S2.inv).mmul(mdiff)[0,0] * (-0.5);
+	elems.front = coeff * exp(exponent);
+      } else {
+	//zero
+	elems.front = 0.0;
+      }
     }
     //writeln(scales);
   }
@@ -342,7 +358,30 @@ void main(string[] args)
     }
   }
 
+  // [presynaptic neuron, connection number, postsynaptic neuron (idx 0) and layer (idx 1)]
+  auto connections = new int[](numUnits * numConns * 2).sliced(numUnits, numConns, 2);
   // choose connections
+  for (i = 0; i < numUnits; i++){
+    // TODO: normalize against max sum (dump extra into null self-connections)
+    auto unitLayerConnProbs = scales[i,0..$,0..$].joiner.array;
+    unitLayerConnProbs[] *= unitClass
+      .map!(post => numLayers.iota
+	    .map!(layer => axon_classPrior[unitClassArr[i]] //relative length of presynaptic axon
+		  * axon_zPrior[unitClassArr[i], layer] //relative amount in given layer
+		  * dend_classPrior[post] // relative length of postsynaptic dendrite
+		  * dend_zPrior[post, layer] // relative amount in given layer
+		  ))
+      .joiner
+      .array[];
+    gsl_ran_discrete_t* sampler =
+      gsl_ran_discrete_preproc(numUnits * numLayers, &unitLayerConnProbs[0]); 
+    connections[i][] +=
+      generate!( () => gsl_ran_discrete(rng, sampler))
+      .take(numConns)
+      .map!(a => [a/numLayers, a % numLayers])
+      .array;
+  }
+
   // choose synapse locations for each connection
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
   // write network-level params
