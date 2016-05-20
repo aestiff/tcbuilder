@@ -1,7 +1,6 @@
 import std.stdio;
 import mir.ndslice;
-import std.algorithm.iteration;
-import std.algorithm.searching;
+import std.algorithm;
 import std.conv;
 import std.array;
 import std.range;
@@ -45,14 +44,14 @@ void main(string[] args)
     .chomp()
     .splitter('\t')
     .filter!(a => a != "")
-    .map!(to!int)
+    .map!(a => a.to!double/1000)
     .take(numClasses - 1)
     .array();
 
   // class-level params
   string[] className;  // name
   real[] abundance; // relative abundance
-  int[] layer;   // soma layer (Z)
+  int[] layer;   // soma layer (Z) - following neuro conventions, deeper layers have higher indices
   char[] xDistro;  // X distribution type
   real[] xMin;  // X min coordinate
   real[] xMax;  // X max coordinate
@@ -409,6 +408,26 @@ void main(string[] args)
   }
   
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
+  auto distances = new double[](numUnits * numConns).sliced(numUnits, numConns);
+  for (i = 0; i < numUnits; i++){
+    for (j = 0; j < numConns; j++){
+      // pre (x,y) to synapse (x,y)
+      double horiz = sqrt((synapseLocs[i, j][0,0] - locations[i][0,0])^^2 +
+			     (synapseLocs[i, j][1,0] - locations[i][1,0])^^2);
+      int top = min(layer[unitClassArr[i]], connections[i,j,1]);
+      int bottom = max(layer[unitClassArr[i]], connections[i,j,1]);
+      double vert = top == bottom ? 0 : interLayerDelays[top..bottom].sum;
+      double dist1 = sqrt(horiz^^2 + vert^^2);
+      // synapse (x,y) to post (x,y)
+      horiz = sqrt((locations[connections[i,j,0]][0,0] - synapseLocs[i, j][0,0])^^2 +
+		   (locations[connections[i,j,0]][1,0] - synapseLocs[i, j][1,0])^^2);
+      top = min(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
+      bottom = max(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
+      vert = top == bottom ? 0: interLayerDelays[top..bottom].sum;
+      distances[i,j] = sqrt(horiz^^2 + vert^^2) + dist1;
+    }
+  }
+
   // write network-level params
   // write class-level params
   // write neuron-level params
