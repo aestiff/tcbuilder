@@ -429,10 +429,45 @@ void main(string[] args)
   }
 
   // write network-level params
+  outputFile.writeln(numClasses, ",", numUnits, ",", numConns, ",", maxDelay);
   // write class-level params
+  foreach (cl; numClasses.iota){
+    outputFile.writeln(unitsPerClass[cl], ",",
+		       dyn_C[cl], ",",
+		       dyn_k[cl], ",",
+		       dyn_vr[cl], ",",
+		       dyn_vt[cl], ",",
+		       dyn_peak[cl], ",",
+		       dyn_a[cl], ",",
+		       dyn_b[cl], ",",
+		       dyn_bhyp[cl], ",",
+		       dyn_c[cl], ",",
+		       dyn_d[cl], ",",
+		       dyn_umax[cl], ",",
+		       dyn_caInact[cl], ",",
+		       stdp_Aplus[cl], ",",
+		       stdp_Aminus[cl], ",",
+		       stdp_tauPlus[cl], ",",
+		       stdp_tauMinus[cl], ",",
+		       plastic[cl] ? 1 : 0, ",",
+		       maxWeight[cl], ",",
+		       record[cl] ? 1 : 0
+		       );
+  }
   // write neuron-level params
+  foreach (ucl; unitClass){
+    outputFile.writeln(ucl);
+  }
   // write synapse-level params
-	
+  for (i = 0; i < numUnits; i++){
+    for (j = 0; j < numConns; j++){
+      outputFile.write(connections[i,j,0], ",",
+		       "<init wt>", ",", //TODO: calculate initial weight
+		       0, ",", //initial change in weight (zero for new network)
+		       "<delay>", ";"); //TODO: calculate delay from distance
+    }
+    outputFile.writeln();
+  }
 }
 
 // determinant; only works for 2x2 matrix, which is all I need...
