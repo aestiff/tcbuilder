@@ -11,11 +11,6 @@ import gsl_qrng;
 import gsl_rng;
 import gsl_randist;
 
-struct pair{
-  real x;
-  real y;
-}
-
 void main(string[] args)
 {
   // execute with: tcbuilder <input_file> <output_file>
@@ -358,11 +353,14 @@ void main(string[] args)
     }
   }
 
+  // these probability calculations don't take into account layer boundaries,
+  // but maybe I don't care anymore...?
+  
   // [presynaptic neuron, connection number, postsynaptic neuron (idx 0) and layer (idx 1)]
   auto connections = new int[](numUnits * numConns * 2).sliced(numUnits, numConns, 2);
   // choose connections
   for (i = 0; i < numUnits; i++){
-    // TODO: normalize against max sum (dump extra into null self-connections)
+    // TODO: normalize against max sum (dump extra probability into null self-connections)
     auto unitLayerConnProbs = scales[i,0..$,0..$].joiner.array;
     unitLayerConnProbs[] *= unitClass
       .map!(post => numLayers.iota
@@ -383,6 +381,33 @@ void main(string[] args)
   }
 
   // choose synapse locations for each connection
+  auto synapseLocs = new double[](numUnits * numConns * 2)
+    .sliced(numUnits, numConns, 2, 1)
+    .pack!2;
+  for (i = 0; i < numUnits; i++){
+    for (j = 0; j < numConns; j++){
+      gsl_ran_bivariate_gaussian(rng,
+				 productCovs[i, //presynaptic unit
+					     connections[i,j,0], // postsynaptic unit
+					     connections[i,j,1] // layer selected for synapse location
+					     ][0,0], // x
+				 productCovs[i, //ditto
+					     connections[i,j,0], //ditto
+					     connections[i,j,1] //ditto
+					     ][1,1], // y
+				 0, // rho; just assuming independence for now - can calculate
+				 &synapseLocs[i,j][0,0], // x location
+				 &synapseLocs[i,j][1,0]  // y location
+				 );				 
+      // gsl returns a point from a standard distribution about the origin
+      // need to shift that to the mean of the distribution of synapse locations for this connection
+      synapseLocs[i,j][] += productMeans[i, //pre
+					 connections[i,j,0], //post
+					 connections[i,j,1] //layer of connection
+					 ][];
+    }
+  }
+  
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
   // write network-level params
   // write class-level params
