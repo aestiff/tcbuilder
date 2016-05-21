@@ -5,6 +5,7 @@ __dummy.html
 *.obj
 tcbuilder
 data
+test/network.dat
 __*
 */.#*
 *#
