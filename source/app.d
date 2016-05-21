@@ -227,9 +227,8 @@ void main(string[] args)
     case 'U': // uniform random
       choose = delegate Slice!(2,double*)() {
 	auto pair = new double[2].sliced(2,1);
-	// TODO: bounds
-	pair[0,0] = gsl_rng_uniform(rng);
-	pair[1,0] = gsl_rng_uniform(rng);
+	pair[0,0] = gsl_rng_uniform(rng) * (xMax[classNum] - xMin[classNum]) + xMin[classNum];
+	pair[1,0] = gsl_rng_uniform(rng) * (yMax[classNum] - yMin[classNum]) + yMin[classNum];
 	return pair;
       };
       break;
@@ -251,10 +250,19 @@ void main(string[] args)
 	qrng = gsl_qrng_alloc(gsl_qrng_halton, 2);	
       }
       choose = delegate Slice!(2,double*)() {
-	// TODO: bounds
+	double longer = max(xMax[classNum] - xMin[classNum], yMax[classNum] - yMin[classNum]);
 	double[] x = new double[](2);
 	auto pair = x.sliced(2,1);
-	gsl_qrng_get(qrng, &x[0]);
+	// draw while not in bounds
+	// strategy is to scale both dimensions equally and throw out
+	// out-of-bounds draws, so that we don't get crowding along a shorter
+	// dimension.
+	// double initialized to NaN, so enter loop with check for NaN in first condition
+	while (x[0].isNaN || x[0] < xMin[classNum] || x[0] > xMax[classNum]
+	       || x[1] < yMin[classNum] || x[1] > yMax[classNum]){ 
+	  gsl_qrng_get(qrng, &x[0]);
+	  pair[] *= longer;
+	}
 	return pair;
       };
       break;
@@ -266,18 +274,22 @@ void main(string[] args)
 	qrng = gsl_qrng_alloc(gsl_qrng_niederreiter_2, 2);	
       }
       choose = delegate Slice!(2,double*)() {
-	// TODO: bounds
+	double longer = max(xMax[classNum] - xMin[classNum], yMax[classNum] - yMin[classNum]);
 	double[] x = new double[](2);
 	auto pair = x.sliced(2,1);
-	gsl_qrng_get(qrng, &x[0]);
+	// same as delegate above
+	while (x[0].isNaN || x[0] < xMin[classNum] || x[0] > xMax[classNum]
+	       || x[1] < yMin[classNum] || x[1] > yMax[classNum]){ 
+	  gsl_qrng_get(qrng, &x[0]);
+	  pair[] *= longer;
+	}
 	return pair;
       };
       break;
     default:
       break;
     }
-    //TODO: sort
-    locations ~= generate!choose.take(unitsPerClass[classNum]).array();
+    locations ~= generate!choose.take(unitsPerClass[classNum]).array.sort!("a[0,0] < b[0,0]").array;
   }
 
   // calculate connection probabilities for each pair of neurons
