@@ -12,8 +12,6 @@ import gsl_randist;
 
 void main(string[] args)
 {
-  // execute with: tcbuilder <input_file> <output_file>
-
   if (args.length < 3){
     writeln("usage: tcbuilder <input_file> <output_file>");
     return;
@@ -200,9 +198,7 @@ void main(string[] args)
     .enumerate
     .map!("a.index.repeat(a.value)")
     .joiner;
-  version(imperative){
-    auto unitClassArr = unitClass.array;
-  }
+  auto unitClassArr = unitClass.array;
 
   //normalize process lengths as a probability
   auto dend_classPrior = dend_totLen.dup;
@@ -370,20 +366,27 @@ void main(string[] args)
   // [presynaptic neuron, connection number, postsynaptic neuron (idx 0) and layer (idx 1)]
   auto connections = new int[](numUnits * numConns * 2).sliced(numUnits, numConns, 2);
   // choose connections
+  auto unitLayerConnProbs = scales.slice;
+  unitLayerConnProbs[] *= unitClass
+    .map!(pre => unitClass
+	  .map!(post => numLayers.iota
+		.map!(layer => axon_classPrior[unitClassArr[pre]] //relative length of presynaptic axon
+		      * axon_zPrior[unitClassArr[pre], layer] //relative amount in given layer
+		      * dend_classPrior[post] // relative length of postsynaptic dendrite
+		      * dend_zPrior[post, layer] // relative amount in given layer
+		      )))
+    .joiner
+    .joiner
+    .array
+    .sliced(numUnits, numUnits, numLayers);
+  auto unitProbMass = numUnits.iota.map!(a => unitLayerConnProbs[a][].byElement.sum).array;
+  auto maxMass = unitProbMass[].fold!max;
   for (i = 0; i < numUnits; i++){
-    // TODO: normalize against max sum (dump extra probability into null self-connections)
-    auto unitLayerConnProbs = scales[i,0..$,0..$].joiner.array;
-    unitLayerConnProbs[] *= unitClass
-      .map!(post => numLayers.iota
-	    .map!(layer => axon_classPrior[unitClassArr[i]] //relative length of presynaptic axon
-		  * axon_zPrior[unitClassArr[i], layer] //relative amount in given layer
-		  * dend_classPrior[post] // relative length of postsynaptic dendrite
-		  * dend_zPrior[post, layer] // relative amount in given layer
-		  ))
-      .joiner
-      .array[];
+    // first dump extra probability mass into self connections, later to be zero-weighted.
+    unitLayerConnProbs[i,i,layer[unitClassArr[i]]] = maxMass - unitProbMass[i]; 
+    auto probs = unitLayerConnProbs[i][].byElement.array;
     gsl_ran_discrete_t* sampler =
-      gsl_ran_discrete_preproc(numUnits * numLayers, &unitLayerConnProbs[0]); 
+      gsl_ran_discrete_preproc(numUnits * numLayers, &probs[0]); 
     connections[i][] +=
       generate!( () => gsl_ran_discrete(rng, sampler))
       .take(numConns)
@@ -421,25 +424,31 @@ void main(string[] args)
   
   // calculate distances (presynaptic to synapse + synapse to postsynaptic)
   auto distances = new double[](numUnits * numConns).sliced(numUnits, numConns);
+  double maxDist;
   for (i = 0; i < numUnits; i++){
     for (j = 0; j < numConns; j++){
-      // pre (x,y) to synapse (x,y)
-      double horiz = sqrt((synapseLocs[i, j][0,0] - locations[i][0,0])^^2 +
-			     (synapseLocs[i, j][1,0] - locations[i][1,0])^^2);
-      int top = min(layer[unitClassArr[i]], connections[i,j,1]);
-      int bottom = max(layer[unitClassArr[i]], connections[i,j,1]);
-      double vert = top == bottom ? 0 : interLayerDelays[top..bottom].sum;
-      double dist1 = sqrt(horiz^^2 + vert^^2);
-      // synapse (x,y) to post (x,y)
-      horiz = sqrt((locations[connections[i,j,0]][0,0] - synapseLocs[i, j][0,0])^^2 +
-		   (locations[connections[i,j,0]][1,0] - synapseLocs[i, j][1,0])^^2);
-      top = min(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
-      bottom = max(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
-      vert = top == bottom ? 0: interLayerDelays[top..bottom].sum;
-      distances[i,j] = sqrt(horiz^^2 + vert^^2) + dist1;
+      if (connections[i,j,0] == i){ //self-connection, will be zero-weighted
+	distances[i,j] = 0;
+      } else {
+	// pre (x,y) to synapse (x,y)
+	double horiz = sqrt((synapseLocs[i, j][0,0] - locations[i][0,0])^^2 +
+			    (synapseLocs[i, j][1,0] - locations[i][1,0])^^2);
+	int top = min(layer[unitClassArr[i]], connections[i,j,1]);
+	int bottom = max(layer[unitClassArr[i]], connections[i,j,1]);
+	double vert = top == bottom ? 0 : interLayerDelays[top..bottom].sum;
+	double dist1 = sqrt(horiz^^2 + vert^^2);
+	// synapse (x,y) to post (x,y)
+	horiz = sqrt((locations[connections[i,j,0]][0,0] - synapseLocs[i, j][0,0])^^2 +
+		     (locations[connections[i,j,0]][1,0] - synapseLocs[i, j][1,0])^^2);
+	top = min(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
+	bottom = max(layer[unitClassArr[connections[i,j,0]]], connections[i,j,1]);
+	vert = top == bottom ? 0: interLayerDelays[top..bottom].sum;
+	distances[i,j] = sqrt(horiz^^2 + vert^^2) + dist1;
+      }
+      maxDist = max(distances[i,j], maxDist);
     }
   }
-
+  writeln("maxDist:", maxDist);
   // write network-level params
   outputFile.writeln(numClasses, ",", numUnits, ",", numConns, ",", maxDelay);
   // write class-level params
@@ -472,11 +481,18 @@ void main(string[] args)
   }
   // write synapse-level params
   for (i = 0; i < numUnits; i++){
+    double wt = maxWeight[unitClassArr[i]];
     for (j = 0; j < numConns; j++){
-      outputFile.write(connections[i,j,0], ",",
-		       "<init wt>", ",", //TODO: calculate initial weight
+      //probably bad design to be making decisions here.
+      int post = connections[i,j,0];
+      int d = max(cast(int)(distances[i,j] / maxDist * maxDelay), 1);
+      outputFile.write(post, ",", // postsynaptic unit
+		       post == i ? 0 : wt > 0 ? wt/2 : wt, ",", // initial weight (zero if to self)
 		       0, ",", //initial change in weight (zero for new network)
-		       "<delay>", ";"); //TODO: calculate delay from distance
+		       d, ";"); //delay
+      if (d > maxDelay) {
+	writeln("delay error: ", d, ", pre:", i, ", post:", post, " dist:", distances[i,j]); 
+      }
     }
     outputFile.writeln();
   }
