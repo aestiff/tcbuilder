@@ -18,7 +18,7 @@ void main(string[] args)
   }
   auto inputFile = File(args[1]);
   auto outputFile = File(args[2], "wt");
-  
+
   // parse input file
   // network-level params
   auto netParams = inputFile
@@ -231,10 +231,15 @@ void main(string[] args)
     case 'L': // in a line
       choose = delegate Slice!(2,double*)() {
       	auto pair = new double[2].sliced(2,1);
-      	pair[0,0] = xMin[classNum]
-	+ ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
-	pair[1,0] = yMin[classNum]
-	+ ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
+	if (unitsPerClass[classNum] > 1){
+	  pair[0,0] = xMin[classNum]
+	    + ((xMax[classNum] - xMin[classNum])/(unitsPerClass[classNum] - 1)) * j;
+	  pair[1,0] = yMin[classNum]
+	    + ((yMax[classNum] - yMin[classNum])/(unitsPerClass[classNum] - 1)) * j++;
+	} else { // stupid answer to stupid div by zero bug
+	  pair[0,0] = xMin[classNum];
+	  pair[1,0] = yMin[classNum];
+	}
 	return pair;
       };
       break;
@@ -287,7 +292,7 @@ void main(string[] args)
     }
     locations ~= generate!choose.take(unitsPerClass[classNum]).array.sort!("a[0,0] < b[0,0]").array;
   }
-
+  // writeln(locations);
   // calculate connection probabilities for each pair of neurons
   // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 + S2)^-1*(m1-m2))
   version (functional){
@@ -379,7 +384,9 @@ void main(string[] args)
     .joiner
     .array
     .sliced(numUnits, numUnits, numLayers);
+  //writeln(unitLayerConnProbs);
   auto unitProbMass = numUnits.iota.map!(a => unitLayerConnProbs[a][].byElement.sum).array;
+  //writeln(unitProbMass);
   auto maxMass = unitProbMass[].fold!max;
   for (i = 0; i < numUnits; i++){
     // first dump extra probability mass into self connections, later to be zero-weighted.
@@ -393,7 +400,7 @@ void main(string[] args)
       .map!(a => [a/numLayers, a % numLayers])
       .array;
   }
-
+  //  writeln(unitLayerConnProbs);
   // choose synapse locations for each connection
   auto synapseLocs = new double[](numUnits * numConns * 2)
     .sliced(numUnits, numConns, 2, 1)
