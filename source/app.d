@@ -45,7 +45,7 @@ void main(string[] args)
     .map!(a => a.to!double/1000)
     .take(numClasses - 1)
     .array();
-
+  
   // class-level params
   string[] className;  // name
   real[] abundance; // relative abundance
@@ -297,6 +297,7 @@ void main(string[] args)
   // 1/(sqrt(det(2pi*(S1+S2)))) * exp ^ (-1/2 * (m1 - m2)^T*(S1 + S2)^-1*(m1-m2))
   version (functional){
     // warning: functional code not updated to handle zero variance convention
+    // nor soma targeting implementation
     auto scales = unitClass.enumerate
       .map!(pre => unitClass.enumerate
 	    .map!(post => numLayers.iota
@@ -320,7 +321,12 @@ void main(string[] args)
       .sliced(numUnits, numUnits, numLayers);
     for (auto elems = scales.byElement; !elems.empty; elems.popFront){
       auto S1 = axon_classLayerCov[unitClassArr[elems.index[0]], elems.index[2]].slice;
-      auto S2 = dend_classLayerCov[unitClassArr[elems.index[1]], elems.index[2]].slice;
+      // 0.01 == magic number for approximate cell body size. Should be generalized.
+      // Note: soma targeting by presynaptic neuron does not affect effective dendritic length
+      // (i.e. post-synaptic prior probability of connecting to the presynaptic neuron)
+      auto S2 = target[unitClassArr[elems.index[0]]] == "soma" ?
+	[0.01, 0, 0, 0.01].sliced(2, 2) :
+	dend_classLayerCov[unitClassArr[elems.index[1]], elems.index[2]].slice;
       // input has zero listed as variance if no probability mass for that class in that layer.
       if (S1[0,0] != 0 && S2[0,0] != 0){
 	S2[] += S1;
@@ -354,7 +360,10 @@ void main(string[] args)
     for (j = 0; j < numUnits; j++){
       for (l = 0; l < numLayers; l++){
 	auto s1 = axon_classLayerCov[unitClassArr[i], l].slice;
-	auto s2 = dend_classLayerCov[unitClassArr[j], l].slice;
+	// magic numbers again for soma targeting
+	auto s2 = target[unitClassArr[i]] == "soma" ?
+	  [0.01, 0, 0, 0.01].sliced(2, 2) :	  
+	  dend_classLayerCov[unitClassArr[j], l].slice;
 	auto s12inv = s1.slice;
 	s12inv[] += s2;
 	s12inv = s12inv.inv;
